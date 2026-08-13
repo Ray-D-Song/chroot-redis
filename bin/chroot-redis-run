@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOTFS=''
+DATA_DIR=''
+CONF_DIR=''
+RUN_UID=''
+RUN_GID=''
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rootfs|--data-dir|--conf-dir|--uid|--gid)
+      key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
+      case "$key" in
+        --rootfs) ROOTFS="$1" ;;
+        --data-dir) DATA_DIR="$1" ;;
+        --conf-dir) CONF_DIR="$1" ;;
+        --uid) RUN_UID="$1" ;;
+        --gid) RUN_GID="$1" ;;
+      esac
+      shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || { echo 'chroot-redis-run must be run by root' >&2; exit 1; }
+[[ -d "$ROOTFS" && -d "$DATA_DIR" && -d "$CONF_DIR" ]] || { echo 'rootfs, data, or configuration directory does not exist' >&2; exit 1; }
+[[ "$RUN_UID" =~ ^[0-9]+$ && "$RUN_GID" =~ ^[0-9]+$ ]] || { echo 'invalid numeric argument' >&2; exit 2; }
+[[ -f "$CONF_DIR/redis.conf" ]] || { echo "missing configuration file: $CONF_DIR/redis.conf" >&2; exit 1; }
+
+mkdir -p "$ROOTFS/var/lib/redis" "$ROOTFS/etc/redis"
+mount --bind "$DATA_DIR" "$ROOTFS/var/lib/redis"
+mount --bind "$CONF_DIR" "$ROOTFS/etc/redis"
+
+exec chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /usr/bin/redis-server /etc/redis/redis.conf
