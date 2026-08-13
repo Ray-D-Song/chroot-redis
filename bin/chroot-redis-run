@@ -32,4 +32,10 @@ mkdir -p "$ROOTFS/var/lib/redis" "$ROOTFS/etc/redis"
 mount --bind "$DATA_DIR" "$ROOTFS/var/lib/redis"
 mount --bind "$CONF_DIR" "$ROOTFS/etc/redis"
 
+# Redis calls setlocale(LC_COLLATE, "") and refuses to start when the inherited
+# locale is missing. Hosts hand down whatever they use (CentOS 7 exports
+# en_US.UTF-8), and the minimal Debian rootfs only carries the built-in C
+# locales, so pin the process to one that always resolves.
+export LANG=C LC_ALL=C
+
 exec chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /usr/bin/redis-server /etc/redis/redis.conf

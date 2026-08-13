@@ -41,6 +41,12 @@ wait_for_redis() {
     sleep 1
   done
   echo "Redis did not become ready on port $PORT" >&2
+  {
+    echo '--- systemctl status ---'
+    systemctl status "$SERVICE" --no-pager 2>&1 | head -20
+    echo '--- journal ---'
+    journalctl -u "$SERVICE" --no-pager -n 30 2>&1
+  } >&2
   return 1
 }
 
