@@ -104,10 +104,11 @@ wait_for_redis "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD"
 redis_cli "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD" ping | grep -Fx PONG
 
 systemctl stop "$CUSTOM_SERVICE"
-CHROOT_REDIS_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
+reinstall_output="$(CHROOT_REDIS_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
   --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --conf-dir "$CUSTOM_CONF_DIR" \
   --service-name "$CUSTOM_SERVICE" --credentials-file "$CUSTOM_CREDENTIALS" --port "$CUSTOM_PORT" --bind 127.0.0.1 \
-  --password "$OTHER_PASSWORD" 2>&1 | grep -q 'ignored' || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
+  --password "$OTHER_PASSWORD" 2>&1)"
+grep -q 'ignored' <<<"$reinstall_output" || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$REDIS_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
