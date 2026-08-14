@@ -33,14 +33,17 @@ systemctl is-active --quiet "$SERVICE"
 
 source "$CREDENTIALS"
 redis_cli() {
-  chroot "$PREFIX/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$PORT" -a "$REDIS_PASSWORD" --no-auth-warning "$@"
+  local prefix="${1:-$PREFIX}" port="${2:-$PORT}" password="${3:-$REDIS_PASSWORD}"
+  if [[ $# -ge 3 && "$1" == /* ]]; then shift 3; else prefix="$PREFIX" port="$PORT" password="$REDIS_PASSWORD"; fi
+  chroot "$prefix/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$port" -a "$password" --no-auth-warning "$@"
 }
 wait_for_redis() {
+  local prefix="${1:-$PREFIX}" port="${2:-$PORT}" password="${3:-$REDIS_PASSWORD}"
   for _ in $(seq 1 30); do
-    if [[ "$(redis_cli ping 2>/dev/null)" == PONG ]]; then return 0; fi
+    if [[ "$(redis_cli "$prefix" "$port" "$password" ping 2>/dev/null)" == PONG ]]; then return 0; fi
     sleep 1
   done
-  echo "Redis did not become ready on port $PORT" >&2
+  echo "Redis did not become ready on port $port" >&2
   {
     echo '--- systemctl status ---'
     systemctl status "$SERVICE" --no-pager 2>&1 | head -20
@@ -97,7 +100,8 @@ CHROOT_REDIS_PASSWORD="$CUSTOM_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$REDIS_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'custom password was not stored in credentials' >&2; exit 1; }
-chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$CUSTOM_PORT" -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -Fx PONG
+wait_for_redis "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD"
+redis_cli "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD" ping | grep -Fx PONG
 
 systemctl stop "$CUSTOM_SERVICE"
 CHROOT_REDIS_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
@@ -107,7 +111,8 @@ CHROOT_REDIS_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$REDIS_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
-chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$CUSTOM_PORT" -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -Fx PONG
+wait_for_redis "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD"
+redis_cli "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$REDIS_PASSWORD" ping | grep -Fx PONG
 
 custom_cleanup
 trap - EXIT
