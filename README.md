@@ -24,7 +24,13 @@ sudo cat /etc/chroot-redis/credentials
 
 默认路径为 `/opt/chroot-redis`（rootfs）、`/var/lib/chroot-redis/data`（数据）、`/etc/chroot-redis/conf`（配置）和 `/etc/chroot-redis/credentials`（凭据）；数据和配置目录不会随普通卸载或升级删除。
 
-默认监听 `0.0.0.0:6379`，安装生成随机 `requirepass` 密码，同时开启 AOF（`appendfsync everysec`）与 RDB 快照；生产使用前必须通过防火墙限制来源地址。
+默认监听 `0.0.0.0:6379`，安装时生成随机 `requirepass` 密码，或通过 `--password` / `CHROOT_REDIS_PASSWORD` 指定，同时开启 AOF（`appendfsync everysec`）与 RDB 快照；生产使用前必须通过防火墙限制来源地址。
+
+密码来源（仅全新实例）：`--password` > `CHROOT_REDIS_PASSWORD` > 随机生成。已有数据目录时传入密码会被忽略并警告，密码以 credentials 文件为准。自动化场景优先使用环境变量：
+
+```bash
+sudo CHROOT_REDIS_PASSWORD='your-secret-here' ./install.sh
+```
 
 连接示例：
 
@@ -43,7 +49,7 @@ Redis 以**最后出现的指令**为准，所以自定义配置要写在托管�
 
 ```bash
 sudo ./install.sh --prefix /opt/chroot-redis --data-dir /var/lib/chroot-redis/data \
-  --conf-dir /etc/chroot-redis/conf --port 6379 --bind '127.0.0.1'
+  --conf-dir /etc/chroot-redis/conf --port 6379 --bind '127.0.0.1' --password 'your-secret-here'
 ```
 
 `sudo ./uninstall.sh` 删除服务和 rootfs、保留数据与配置；仅在确认不再需要这份数据时使用 `sudo ./uninstall.sh --purge-data`（同时删除数据、配置和凭据）。

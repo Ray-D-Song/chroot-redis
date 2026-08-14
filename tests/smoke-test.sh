@@ -70,4 +70,46 @@ redis_cli get ci_smoke | grep -Fx ok
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --conf-dir "$CONF_DIR" \
   --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data
 [[ ! -e "$DATA_DIR" && ! -e "$CONF_DIR" ]] || { echo 'purge-data did not remove test data' >&2; exit 1; }
+
+# Custom password via environment variable on a fresh install.
+CUSTOM_TEST_ID="${TEST_ID}-custom"
+CUSTOM_PREFIX="/opt/chroot-redis-test-$CUSTOM_TEST_ID"
+CUSTOM_DATA_DIR="/var/lib/chroot-redis-test-$CUSTOM_TEST_ID"
+CUSTOM_SERVICE="chroot-redis-test-$CUSTOM_TEST_ID"
+CUSTOM_PORT="$(( 20000 + RANDOM % 20000 ))"
+CUSTOM_CONF_DIR="/etc/chroot-redis-test-$CUSTOM_TEST_ID/conf"
+CUSTOM_CREDENTIALS="/etc/chroot-redis-test-$CUSTOM_TEST_ID/credentials"
+CUSTOM_PASSWORD='ci-fixed-pass-8chars'
+OTHER_PASSWORD='other-pass-8chars'
+
+custom_cleanup() {
+  if [[ -x "$PACKAGE_DIR/uninstall.sh" ]]; then
+    "$PACKAGE_DIR/uninstall.sh" --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --conf-dir "$CUSTOM_CONF_DIR" \
+      --service-name "$CUSTOM_SERVICE" --credentials-file "$CUSTOM_CREDENTIALS" --purge-data || true
+  fi
+  rm -rf "$CUSTOM_PREFIX" "$CUSTOM_DATA_DIR" "$(dirname "$CUSTOM_CREDENTIALS")"
+}
+trap custom_cleanup EXIT
+
+CHROOT_REDIS_PASSWORD="$CUSTOM_PASSWORD" "$PACKAGE_DIR/install.sh" \
+  --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --conf-dir "$CUSTOM_CONF_DIR" \
+  --service-name "$CUSTOM_SERVICE" --credentials-file "$CUSTOM_CREDENTIALS" --port "$CUSTOM_PORT" --bind 127.0.0.1
+systemctl is-active --quiet "$CUSTOM_SERVICE"
+source "$CUSTOM_CREDENTIALS"
+[[ "$REDIS_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'custom password was not stored in credentials' >&2; exit 1; }
+chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$CUSTOM_PORT" -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -Fx PONG
+
+systemctl stop "$CUSTOM_SERVICE"
+CHROOT_REDIS_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
+  --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --conf-dir "$CUSTOM_CONF_DIR" \
+  --service-name "$CUSTOM_SERVICE" --credentials-file "$CUSTOM_CREDENTIALS" --port "$CUSTOM_PORT" --bind 127.0.0.1 \
+  --password "$OTHER_PASSWORD" 2>&1 | grep -q 'ignored' || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
+systemctl is-active --quiet "$CUSTOM_SERVICE"
+source "$CUSTOM_CREDENTIALS"
+[[ "$REDIS_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
+chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/redis-cli -h 127.0.0.1 -p "$CUSTOM_PORT" -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -Fx PONG
+
+custom_cleanup
+trap - EXIT
+
 echo 'chroot-redis smoke test passed'

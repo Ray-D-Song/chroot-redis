@@ -9,6 +9,7 @@ SERVICE_NAME=chroot-redis
 RUN_USER=chroot-redis
 PORT=6379
 BIND_ADDRESS='0.0.0.0'
+PASSWORD_CLI=''
 
 usage() {
   cat <<EOF
@@ -20,12 +21,61 @@ Usage: sudo ./install.sh [options]
   --bind ADDRESSES          Redis bind addresses (default: $BIND_ADDRESS)
   --service-name NAME       systemd service name (default: $SERVICE_NAME)
   --credentials-file PATH   Root-only credentials file (default: $CREDENTIALS)
+  --password VALUE          requirepass for a new instance (or set CHROOT_REDIS_PASSWORD)
 EOF
+}
+
+validate_password() {
+  local pw="$1"
+  [[ -n "$pw" ]] || { echo 'password must not be empty' >&2; exit 2; }
+  (( ${#pw} >= 8 )) || { echo 'password must be at least 8 characters' >&2; exit 2; }
+  [[ "$pw" != *$'\n'* && "$pw" != *$'\0'* ]] || { echo 'password must not contain newline or null bytes' >&2; exit 2; }
+  [[ ! "$pw" =~ [[:cntrl:]] ]] || { echo 'password must not contain control characters' >&2; exit 2; }
+}
+
+password_was_provided() {
+  [[ -n "$PASSWORD_CLI" || -n "${CHROOT_REDIS_PASSWORD:-}" ]]
+}
+
+warn_if_password_ignored() {
+  if password_was_provided; then
+    echo 'Warning: existing data directory detected; --password and CHROOT_REDIS_PASSWORD were ignored.' >&2
+  fi
+}
+
+resolve_password_for_new_install() {
+  if [[ -n "$PASSWORD_CLI" ]]; then
+    password="$PASSWORD_CLI"
+    echo "Using password from --password. It will be stored in $CREDENTIALS (root only)."
+  elif [[ -n "${CHROOT_REDIS_PASSWORD:-}" ]]; then
+    password="$CHROOT_REDIS_PASSWORD"
+    echo "Using password from CHROOT_REDIS_PASSWORD. It will be stored in $CREDENTIALS (root only)."
+  else
+    password="$(openssl rand -hex 32)"
+    echo "Generated Redis password. It is stored in $CREDENTIALS (root only)."
+  fi
+  validate_password "$password"
+}
+
+read_credentials_password() {
+  password="$(awk -F= '$1 == "REDIS_PASSWORD" { print substr($0, index($0, "=") + 1) }' "$CREDENTIALS")"
+  [[ -n "$password" ]] || { echo "credentials file has no REDIS_PASSWORD: $CREDENTIALS" >&2; exit 1; }
+}
+
+format_requirepass() {
+  local pw="$1"
+  if [[ "$pw" =~ [[:space:]#\\\"] ]]; then
+    local escaped="${pw//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    printf '"%s"' "$escaped"
+  else
+    printf '%s' "$pw"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix|--data-dir|--conf-dir|--port|--bind|--service-name|--credentials-file)
+    --prefix|--data-dir|--conf-dir|--port|--bind|--service-name|--credentials-file|--password)
       key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
       case "$key" in
         --prefix) PREFIX="$1" ;;
@@ -35,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --bind) BIND_ADDRESS="$1" ;;
         --service-name) SERVICE_NAME="$1" ;;
         --credentials-file) CREDENTIALS="$1" ;;
+        --password) PASSWORD_CLI="$1" ;;
       esac
       shift ;;
     --help|-h) usage; exit 0 ;;
@@ -91,15 +142,17 @@ ensure_chroot_identity "$PREFIX/rootfs"
 # previous install instead of locking the operator out of their own data.
 data_has_state=false
 if [[ -e "$DATA_DIR/dump.rdb" || -e "$DATA_DIR/appendonlydir" ]]; then data_has_state=true; fi
-if [[ -f "$CREDENTIALS" ]]; then
-  password="$(awk -F= '$1 == "REDIS_PASSWORD" { print substr($0, index($0, "=") + 1) }' "$CREDENTIALS")"
-  [[ -n "$password" ]] || { echo "credentials file has no REDIS_PASSWORD: $CREDENTIALS" >&2; exit 1; }
+if [[ "$data_has_state" == true ]]; then
+  [[ -f "$CREDENTIALS" ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
+  read_credentials_password
+  warn_if_password_ignored
+elif [[ -f "$CREDENTIALS" ]]; then
+  read_credentials_password
+  warn_if_password_ignored
 else
-  [[ "$data_has_state" == false ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
-  # Hex keeps the password free of characters that redis.conf would need quoted.
-  password="$(openssl rand -hex 32)"
-  echo "Generated Redis password. It is stored in $CREDENTIALS (root only)."
+  resolve_password_for_new_install
 fi
+requirepass_line="requirepass $(format_requirepass "$password")"
 install -m 0600 /dev/null "$CREDENTIALS"
 cat > "$CREDENTIALS" <<EOF
 REDIS_PASSWORD=$password
@@ -139,7 +192,7 @@ write_managed_block "$CONF_DIR/redis.conf" <<EOF
 bind $BIND_ADDRESS
 port $PORT
 protected-mode yes
-requirepass $password
+$requirepass_line
 dir /var/lib/redis
 appendonly yes
 appendfsync everysec
